@@ -11,17 +11,38 @@
 
 import asyncio
 import logging
+import os
+import signal
 import sys
 
 import dbussy
+import slack
 from dbussy import DBUS
+from decouple import config
 
 logger = logging.getLogger(__name__)
+
+CLEANUP_SECONDS = 5
 
 
 async def wait_forever():
     while True:
         await asyncio.sleep(3600)
+
+
+async def wait_shielded():
+    logger = logging.getLogger("wait_shielded")
+    while True:
+        try:
+            await wait_forever()
+        except asyncio.CancelledError:
+            logger.debug("Catch CancelledError")
+            pass
+
+
+async def throw_cancelled():
+    await asyncio.sleep(1)
+    raise asyncio.CancelledError
 
 
 async def inhibit_notifications():
@@ -48,26 +69,88 @@ async def keep_screen_active():
     await wait_forever()
 
 
-async def enable_slack_dnd():
-    logger = logging.getLogger('enable_slack_dnd')
+async def slack_dnd():
+    logger = logging.getLogger("slack_dnd")
+    slack_token = config("SLACK_API_TOKEN")
+    if not slack_token:
+        logger.warning("SLACK_API_TOKEN is empty, skip Slack DnD")
+        return
+    client = slack.WebClient(token=slack_token, run_async=True)
+    # while True:
+    # try:
+    # await asyncio.sleep(10)
+    # except asyncio.CancelledError:
+    # logger.debug("Catching CancelledError")
+    # pass
     try:
-        await wait_forever()
+        while True:
+            # await client.dnd_setSnooze(num_minutes=15)
+            await asyncio.sleep(10)
+    # except asyncio.CancelledError:
     finally:
-        logger.debug("finally")
-        # await asyncio.sleep(1)
-        # logger.info("after sleep")
+        logger.info('Disabling "Do Not Disturb"')
+        await asyncio.sleep(10)
+        logger.info("after sleep")
+        # await asyncio.wait_for(client.dnd_endSnooze(), 5)
+        # await asyncio.wait_for(asyncio.sleep(10), 5)
 
 
-async def main():
+async def main_routine():
     loop = asyncio.get_running_loop()
-    tasks = [inhibit_notifications(), keep_screen_active(), enable_slack_dnd()]
+    tasks = [
+        inhibit_notifications(),
+        keep_screen_active(),
+        slack_dnd(),
+        wait_shielded(),
+    ]
+    tasks = [asyncio.create_task(coro) for coro in tasks]
+    # gathering_task = asyncio.gather(*tasks, return_exceptions=True)
+    current_task = asyncio.current_task()
+
+    def cancel_tasks():
+        logger.debug("Cancelling tasks...")
+
+        current_task.cancel()
+        # gathering_task.cancel()
+        # for task in tasks:
+        # task.cancel()
+
+    loop.add_signal_handler(signal.SIGTERM, cancel_tasks)
+    loop.add_signal_handler(signal.SIGINT, cancel_tasks)
+
+    # asyncio.gather(*tasks)
     try:
-        await asyncio.gather(*tasks)
-    except asyncio.CancelledError:
-        logger.info("Cancelled")
+        await asyncio.gather(*tasks, return_exceptions=False)
+        # await gathering_task
+        # pass
+    # except asyncio.CancelledError:
+    finally:
+        logger.info("Waiting for tasks to clean up... (press CTRL+C to force quit)")
+        # await gathering_task
+        # await asyncio.wait_for(
+            # asyncio.gather(*tasks, return_exceptions=True), timeout=CLEANUP_SECONDS
+        # )
+        loop.close()
+        # loop.remove_signal_handler(signal.SIGTERM)
+        # loop.remove_signal_handler(signal.SIGINT)
+    logger.debug("End of main_routine")
 
 
-if __name__ == "__main__":
+async def main2():
+    await main_routine()
+    # await asyncio.sleep(10)
+
+    # await throw_cancelled()
+    # await asyncio.sleep(1)
+
+    # task = asyncio.create_task(wait_shielded())
+    # await asyncio.sleep(1)
+    # task.cancel()
+    # await asyncio.sleep(1)
+    # await task
+
+
+def main():
     logging.basicConfig(
         format="%(name)s: %(message)s",
         level=logging.DEBUG if sys.flags.dev_mode else logging.INFO,
@@ -78,4 +161,9 @@ if __name__ == "__main__":
     # handler.setLevel(logging.DEBUG if sys.flags.dev_mode else logging.INFO)
     # logger.addHandler(handler)
     # logger.propagate = False
-    asyncio.run(main())
+    asyncio.run(main2())
+    print("After loop")
+
+
+if __name__ == "__main__":
+    main()

@@ -8,6 +8,7 @@ authors = ["Simon Brulhart <simon@brulhart.me>"]
 python = "^3.7"
 DBussy = "^1.2"
 slackclient = "^2.1"
+python-decouple = "^3.1"
 
 [tool.poetry.dev-dependencies]
 ipdb = "^0.12.2"
