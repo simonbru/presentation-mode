@@ -6,15 +6,29 @@ import logging
 import os
 import signal
 import sys
+from pathlib import Path
 
 import dbussy
 import slack
 from dbussy import DBUS
-from decouple import config
+from decouple import Config, RepositoryEnv
 
 logger = logging.getLogger(__name__)
 
 CLEANUP_SECONDS = 5
+
+
+def config_file_path():
+    config_home = os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")
+    return Path(config_home) / "presentation_mode.cfg"
+
+
+def load_config():
+    fpath = config_file_path()
+    if fpath.exists():
+        return Config(RepositoryEnv(fpath))
+    else:
+        return Config(os.environ)
 
 
 async def wait_forever():
@@ -52,30 +66,43 @@ async def keep_screen_active():
         conn.close()
 
 
-async def slack_dnd():
-    logger = logging.getLogger("slack_dnd")
-    slack_token = config("SLACK_API_TOKEN")
-    if not slack_token:
-        logger.warning("SLACK_API_TOKEN is empty, skip Slack DnD")
-        return
-    client = slack.WebClient(token=slack_token, run_async=True)
+async def slack_dnd(token):
+    client = slack.WebClient(token=token, run_async=True)
     await client.dnd_setSnooze(num_minutes=15)
     try:
         while True:
             await asyncio.sleep(10 * 60)
             await client.dnd_setSnooze(num_minutes=15)
     finally:
-        logger.info('Disabling "Do Not Disturb"')
+        logger.debug('Disabling "Do Not Disturb"')
         await client.dnd_endSnooze()
 
 
 async def run_tasks():
-    tasks = [inhibit_notifications(), keep_screen_active(), slack_dnd()]
-    await asyncio.gather(*tasks, return_exceptions=False)
+    conf = load_config()
+    tasks = [inhibit_notifications(), keep_screen_active()]
+
+    slack_token = conf.get("SLACK_API_TOKEN", default=None)
+    if slack_token:
+        tasks.append(slack_dnd(token=slack_token))
+    else:
+        logging.info(
+            f"Set SLACK_API_TOKEN=<your-token> in environment or in {config_file_path()}"
+            ' to enable Slack "Do not disturb".'
+        )
+
+    async def catch_all_errors(awaitable):
+        try:
+            await awaitable
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.exception(e)
+
+    await asyncio.gather(*(catch_all_errors(coro) for coro in tasks))
 
 
 async def main_coro():
-    logger = logging.getLogger("main")
     loop = asyncio.get_running_loop()
 
     main_task = asyncio.create_task(run_tasks())
@@ -107,10 +134,10 @@ async def main_coro():
 
 
 def main():
-    logging.basicConfig(
-        format="%(name)s: %(message)s",
-        level=logging.DEBUG if sys.flags.dev_mode else logging.INFO,
-    )
+    if sys.flags.dev_mode:
+        logging.basicConfig(format="%(name)s:%(funcName)s: %(message)s", level=logging.DEBUG)
+    else:
+        logging.basicConfig(format="%(message)s", level=logging.INFO)
     asyncio.run(main_coro())
 
 
