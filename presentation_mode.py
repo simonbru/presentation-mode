@@ -37,6 +37,9 @@ async def wait_forever():
 
 
 async def inhibit_notifications():
+    """
+    Enable desktop's "Do not disturb" mode (i.e. hide notifications).
+    """
     conn = await dbussy.Connection.bus_get_async(DBUS.BUS_SESSION, private=False)
     try:
         msg = dbussy.Message.new_method_call(
@@ -52,6 +55,10 @@ async def inhibit_notifications():
 
 
 async def keep_screen_active():
+    """
+    Prevent the desktop environment from dimming the screen
+    or starting the screensaver.
+    """
     conn = await dbussy.Connection.bus_get_async(DBUS.BUS_SESSION, private=False)
     try:
         msg = dbussy.Message.new_method_call(
@@ -67,6 +74,9 @@ async def keep_screen_active():
 
 
 async def slack_dnd(token):
+    """
+    Enable/disable Slack's "Do not disturb" mode.
+    """
     client = slack.WebClient(token=token, run_async=True)
     await client.dnd_setSnooze(num_minutes=15)
     try:
@@ -79,6 +89,13 @@ async def slack_dnd(token):
 
 
 async def run_tasks():
+    """
+    Start and run all tasks as if they were long-running threads.
+    Each task is expected to revert their side-effect (e.g. DnD mode)
+    when they get cancelled.
+    Let individual tasks crash with a stack trace dump on the terminal,
+    but end the coroutine once all tasks are done.
+    """
     conf = load_config()
     tasks = [inhibit_notifications(), keep_screen_active()]
 
@@ -102,7 +119,13 @@ async def run_tasks():
     await asyncio.gather(*(catch_all_errors(coro) for coro in tasks))
 
 
-async def main_coro():
+async def runner():
+    """
+    Handle loop lifecycle. Cancel loop in 2 phases (soft, then hard after a timeout) with
+    the ability to hard-cancel sooner.
+    A proper loop runner (such as `asyncio.run`) would probably better serve this role.
+    However this approach would require more boilerplate code.
+    """
     loop = asyncio.get_running_loop()
 
     main_task = asyncio.create_task(run_tasks())
@@ -128,7 +151,7 @@ async def main_coro():
         for sig in signals:
             loop.remove_signal_handler(sig)
         # `asyncio.run` will cancel and wait for all running tasks
-        # (including `main_task`) when leaving `main_coro()`
+        # (including `main_task`) when leaving `runner()`
         logger.info("Waiting for tasks to clean up... (press CTRL+C to force quit)")
         loop.call_later(CLEANUP_SECONDS, force_quit)
 
@@ -138,7 +161,7 @@ def main():
         logging.basicConfig(format="%(name)s:%(funcName)s: %(message)s", level=logging.DEBUG)
     else:
         logging.basicConfig(format="%(message)s", level=logging.INFO)
-    asyncio.run(main_coro())
+    asyncio.run(runner())
 
 
 if __name__ == "__main__":
