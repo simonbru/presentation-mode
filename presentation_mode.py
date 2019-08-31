@@ -129,11 +129,11 @@ async def runner():
     loop = asyncio.get_running_loop()
 
     main_task = asyncio.create_task(run_tasks())
-    current_task = asyncio.current_task()
+    sentinel = asyncio.create_task(wait_forever())
 
     def cancel_tasks():
         logger.debug("Cancelling tasks...")
-        current_task.cancel()
+        sentinel.cancel()
 
     def force_quit():
         logger.debug("Stopping the loop by force...")
@@ -144,9 +144,9 @@ async def runner():
         loop.add_signal_handler(sig, cancel_tasks)
 
     try:
-        await wait_forever()
+        await asyncio.wait({main_task, sentinel}, return_when=asyncio.FIRST_COMPLETED)
     except asyncio.CancelledError:
-        pass
+        logger.debug("Cancelled")
     finally:
         for sig in signals:
             loop.remove_signal_handler(sig)
